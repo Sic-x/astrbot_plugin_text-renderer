@@ -1,32 +1,75 @@
 {
-    "fetch_channel_id": {
-        "description": "要获取消息的 Discord 频道 ID",
+    "text_file_path": {
         "type": "string",
-        "default": "1414437021753016462"
+        "label": "文本文件路径",
+        "description": "要转换为图片的文本文件的绝对路径或相对于 astrbot/data 的路径。支持 ${today_prefix} 和通配符 *。",
+        "default": "plugins/astrbot_plugin_text_to_image/daily_dev.txt"
     },
-    "summary_channel_id": {
-        "description": "要发送翻译摘要的 Discord 频道 ID",
+    "font_path": {
         "type": "string",
-        "default": "1414437021753016462"
+        "label": "常规字体路径",
+        "description": "用于渲染常规文本的 .ttf 或 .otf 字体文件的绝对路径。",
+        "default": ""
     },
-    "schedule_hour": {
-        "description": "每日任务执行的小时 (24小时制)",
+    "font_path_bold": {
+        "type": "string",
+        "label": "粗体字体路径",
+        "description": "用于渲染粗体文本（如 **bold**）的 .ttf 或 .otf 字体文件的绝对路径。",
+        "default": ""
+    },
+    "font_size": {
         "type": "int",
-        "default": 9
+        "label": "字号",
+        "description": "文本的字体大小。",
+        "default": 24
     },
-    "schedule_minute": {
-        "description": "每日任务执行的分钟",
+    "theme": {
+        "type": "string",
+        "label": "主题",
+        "description": "选择一个预设的颜色主题。",
+        "default": "dark-gradient",
+        "options": [
+            "default",
+            "light",
+            "dark",
+            "light-gradient",
+            "dark-gradient"
+        ]
+    },
+    "width": {
         "type": "int",
-        "default": 0
+        "label": "图片宽度",
+        "description": "生成图片的宽度（像素）。",
+        "default": 1080
     },
-    "schedule_timezone": {
-        "description": "任务调度所使用的时区",
-        "type": "string",
-        "default": "Asia/Hong_Kong"
+    "padding": {
+        "type": "int",
+        "label": "内边距",
+        "description": "内容区域与图片边缘的距离。",
+        "default": 40
     },
-    "team_answers_bot_id": {
-        "description": "需要拉取的Discord用户ID",
-        "type": "string",
-        "default": "1414437458854281216"
+    "use_frame": {
+        "type": "bool",
+        "label": "使用高级边框",
+        "description": "是否为图片添加带阴影的边框效果。",
+        "default": true
+    },
+    "corner_radius": {
+        "type": "int",
+        "label": "圆角半径",
+        "description": "图片和边框的圆角半径。",
+        "default": 15
+    },
+    "text_line_spacing": {
+        "type": "int",
+        "label": "文本行间距",
+        "description": "普通文本行之间的额外垂直间距。",
+        "default": 5
+    },
+    "divider_margin": {
+        "type": "int",
+        "label": "分割线垂直外边距",
+        "description": "在分割线上方和下方应用的额外垂直间距。",
+        "default": 10
     }
 }

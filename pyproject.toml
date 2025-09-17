@@ -1,6 +1,6 @@
 [project]
-name = "astrbot_plugin_snap_translator"
-version = "1.1.4"
+name = "astrbot_plugin_text_to_image"
+version = "1.1.0"
 
 # pyproject.toml
 # 用于集中管理 Python 项目的配置，例如依赖、构建工具和代码质量工具的设置。
