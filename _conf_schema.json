@@ -1,0 +1,32 @@
+{
+    "fetch_channel_id": {
+        "description": "要获取消息的 Discord 频道 ID",
+        "type": "string",
+        "default": "1414437021753016462"
+    },
+    "summary_channel_id": {
+        "description": "要发送翻译摘要的 Discord 频道 ID",
+        "type": "string",
+        "default": "1414437021753016462"
+    },
+    "schedule_hour": {
+        "description": "每日任务执行的小时 (24小时制)",
+        "type": "int",
+        "default": 9
+    },
+    "schedule_minute": {
+        "description": "每日任务执行的分钟",
+        "type": "int",
+        "default": 0
+    },
+    "schedule_timezone": {
+        "description": "任务调度所使用的时区",
+        "type": "string",
+        "default": "Asia/Hong_Kong"
+    },
+    "team_answers_bot_id": {
+        "description": "需要拉取的Discord用户ID",
+        "type": "string",
+        "default": "1414437458854281216"
+    }
+}

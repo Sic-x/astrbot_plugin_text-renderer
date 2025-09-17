@@ -1,0 +1,5 @@
+name: astrbot_plugin_snap_translator
+author: sic
+description: 自动获取并翻译 Marvel Snap 开发者问答
+version: 1.1.4
+repo: https://github.com/Sic-x/astrbot_plugin_snap_translator
