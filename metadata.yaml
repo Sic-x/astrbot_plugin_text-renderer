@@ -1,5 +1,5 @@
-name: astrbot_plugin_text_to_image
+name: astrbot_plugin_text-renderer
 author: sic
-description: 从文本文件生成图片
+description: 文本文件生成图片
 version: 1.1.0
 repo: 

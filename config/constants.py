@@ -4,9 +4,9 @@
 # @Date    : 2025/9/16
 
 # --- 插件信息 ---
-PLUGIN_NAME = "text_to_image"
+PLUGIN_NAME = "astrbot_plugin_text-renderer"
 PLUGIN_AUTHOR = "sic"
-PLUGIN_DESCRIPTION = "从文本文件生成图片"
+PLUGIN_DESCRIPTION = "文本文件生成图片"
 PLUGIN_VERSION = "1.1.0"
 
 # --- 目录名称 ---

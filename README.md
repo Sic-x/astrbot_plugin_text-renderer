@@ -1,4 +1,4 @@
-# Text to Image Plugin for AstrBot
+# Text Render Plugin for AstrBot
 
 这是一个为 AstrBot 设计的插件，可以将格式化的文本文档转换为设计精美的图片。它非常适合用于生成每日报告、公告、笔记或其他需要以图片形式分享的文本内容。
 
@@ -42,14 +42,12 @@
 ### 配置示例
 
 ```yaml
-# 在 AstrBot 的 config.yaml 中
-plugins:
-  astrbot_plugin_text_to_image:
-    text_file_path: "/path/to/reports/${today_prefix}_*.txt"
-    font_path: "/path/to/your/font/regular.ttf"
-    font_path_bold: "/path/to/your/font/bold.ttf"
-    theme: "light"
-    width: 1200
+# 在 AstrBot 的 插件配置 中
+  text_file_path: "/path/to/reports/${today_prefix}_*.txt"
+  font_path: "/path/to/your/font/regular.ttf"
+  font_path_bold: "/path/to/your/font/bold.ttf"
+  theme: "light"
+  width: 1200
 ```
 
 ## 🚀 命令用法
