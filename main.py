@@ -198,40 +198,26 @@ def text_to_image(
         for run in merged_runs:
             font = fonts[run["style"]]
             text = run["text"]
-
             i = 0
             while i < len(text):
                 char = text[i]
                 char_width = font.getbbox(char)[2]
 
                 if current_width + char_width > max_content_width:
-                    # 禁则处理
-                    if char in no_start_chars and current_line:
-                        # 找到当前行最后一个 run 和最后一个字符
-                        last_run_index = len(current_line) - 1
-                        while last_run_index >= 0 and not current_line[last_run_index]["text"]:
-                            last_run_index -= 1
-
-                        if last_run_index >= 0:
-                            last_run = current_line[last_run_index]
-                            last_char = last_run["text"][-1]
-
-                            # 从当前行移除最后一个字符
-                            last_run["text"] = last_run["text"][:-1]
-
-                            # 将当前行添加到结果中
-                            lines.append(current_line)
-
-                            # 将被移除的字符作为新行的第一个 run
-                            current_line = [{"text": last_char, "style": last_run["style"]}]
-                            current_width = get_run_width(current_line[0])
-
-                            # 重新处理当前字符
-                            continue
-
                     lines.append(current_line)
                     current_line = []
                     current_width = 0
+
+                # 禁则处理：如果新行的第一个字符是禁则字符，则从上一行移动一个字符过来
+                if not current_line and char in no_start_chars and lines:
+                    prev_line = lines[-1]
+                    if prev_line:
+                        last_run = prev_line[-1]
+                        if last_run["text"]:
+                            moved_char = last_run["text"][-1]
+                            last_run["text"] = last_run["text"][:-1]
+                            current_line.append({"text": moved_char, "style": last_run["style"]})
+                            current_width += get_run_width(current_line[-1])
 
                 if not current_line or current_line[-1]["style"] != run["style"]:
                     current_line.append({"text": char, "style": run["style"]})
@@ -269,15 +255,21 @@ def text_to_image(
                 max_h = h
         return max_h
 
+    def is_divider(line):
+        return line and "type" in line[0] and line[0]["type"] == "divider"
+
+    def is_empty_line(line):
+        return line and "type" in line[0] and line[0]["type"] == "empty"
+
     total_height = 0
     for i, line in enumerate(processed_lines):
         is_last_line = i == len(processed_lines) - 1
 
-        if line and "type" in line[0] and line[0]["type"] == "divider":
-            if i > 0 and "type" in processed_lines[i - 1][0] and processed_lines[i - 1][0]["type"] != "empty":
+        if is_divider(line):
+            if i > 0 and not is_empty_line(processed_lines[i - 1]):
                 total_height -= text_line_spacing
             total_height += get_line_height([{"text": "─", "style": "normal"}]) + (2 * divider_margin)
-        elif line and "type" in line[0] and line[0]["type"] == "empty":
+        elif is_empty_line(line):
             total_height += get_line_height([{"text": " ", "style": "normal"}])
         else:
             total_height += get_line_height(line)
@@ -304,14 +296,14 @@ def text_to_image(
     for i, line in enumerate(processed_lines):
         is_last_line = i == len(processed_lines) - 1
 
-        if line and "type" in line[0] and line[0]["type"] == "divider":
+        if is_divider(line):
             line_height = get_line_height([{"text": "─", "style": "normal"}])
-            if i > 0 and "type" in processed_lines[i - 1][0] and processed_lines[i - 1][0]["type"] != "empty":
+            if i > 0 and not is_empty_line(processed_lines[i - 1]):
                 current_y -= text_line_spacing
             current_y += divider_margin
             draw.text((padding, current_y), divider_line_text, font=font_regular, fill=text_color)
             current_y += line_height + divider_margin
-        elif line and "type" in line[0] and line[0]["type"] == "empty":
+        elif is_empty_line(line):
             line_height = get_line_height([{"text": " ", "style": "normal"}])
             current_y += line_height
         else:
@@ -438,7 +430,7 @@ class TextToImage(Star):
             output_filename = self.output_dir / f"daily_dev_{timestamp}.png"
 
             # 在线程池中执行图像生成，避免阻塞事件循环
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 text_to_image,
@@ -458,10 +450,8 @@ class TextToImage(Star):
             # 发送生成的图片
             yield event.image_result(str(output_filename))
         except Exception as e:
-            logger.error(f"生成日报时出错: {str(e)}")
-            yield event.plain_result(f"生成日报时出错: {str(e)}")
             logger.error(f"处理 'daily dev' 命令时发生未知错误: {e}", exc_info=True)
-            yield event.plain_result(f"处理命令时发生内部错误: {e}")
+            yield event.plain_result(f"生成日报时出错: {str(e)}")
 
     async def terminate(self):
         """插件终止时调用的清理函数。"""
