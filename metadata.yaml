@@ -1,4 +1,4 @@
-name: astrbot_plugin_text-renderer
+name: astrbot_plugin_text_renderer
 author: sic
 description: 文本文件生成图片
 version: 1.1.0
