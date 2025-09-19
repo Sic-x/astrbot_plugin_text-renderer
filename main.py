@@ -1,272 +1,409 @@
+
 import asyncio
-import json
-from datetime import datetime, timedelta, timezone
+import sys
 from pathlib import Path
-
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Star, StarTools, register
-
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from .config import constants
+import datetime
+import re
 
-DISCORD_MESSAGE_CHUNK_SIZE = 1980
+# --- 图像效果函数 ---
+def create_gradient_image(width, height, color1, color2):
+    """创建一个从 color1 到 color2 的垂直渐变图像。"""
+    c1 = np.array(color1, dtype=np.uint8)
+    c2 = np.array(color2, dtype=np.uint8)
+    gradient = np.linspace(c1, c2, height, dtype=np.uint8)
+    image_array = np.tile(gradient, (width, 1, 1)).transpose(1, 0, 2)
+    return Image.fromarray(image_array)
 
+def apply_effects(image: Image, use_frame: bool, corner_radius: int):
+    """为图像应用圆角和可选的带阴影的边框。"""
+    if not use_frame and corner_radius == 0:
+        return image
 
-@register(
-    constants.PLUGIN_NAME,
-    constants.PLUGIN_AUTHOR,
-    constants.PLUGIN_DESCRIPTION,
-    constants.PLUGIN_VERSION,
-)
-class SnapTranslator(Star):
+    image = image.convert("RGBA")
+    # 应用圆角
+    if corner_radius > 0:
+        mask = Image.new("L", image.size, 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.rounded_rectangle((0, 0, image.width, image.height), radius=corner_radius, fill=255)
+        image.putalpha(mask)
+
+    if not use_frame:
+        return image
+
+    # 应用带阴影的边框
+    frame_padding = 20
+    shadow_offset = 10
+    blur_radius = 15
+    shadow_color = (0, 0, 0, 50)
+    
+    frame_with_shadow = Image.new("RGBA", (image.width + 2 * frame_padding + shadow_offset, image.height + 2 * frame_padding + shadow_offset), (0, 0, 0, 0))
+    
+    shadow = Image.new("RGBA", frame_with_shadow.size, (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(shadow)
+    shadow_box = (frame_padding, frame_padding, frame_padding + image.width, frame_padding + image.height)
+    shadow_draw.rounded_rectangle(shadow_box, radius=corner_radius, fill=shadow_color)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
+    
+    frame_with_shadow.paste(shadow, (shadow_offset, shadow_offset), shadow)
+    frame_with_shadow.paste(image, (frame_padding, frame_padding), image)
+    
+    return frame_with_shadow
+
+# --- 核心文本转图片函数 ---
+def text_to_image(text_content: str, output_path: Path, font_path: Path, font_path_bold: Path, font_size: int, padding: int, theme: str, use_frame: bool, corner_radius: int, width: int, text_line_spacing: int, divider_margin: int, **kwargs):
+    """
+    将给定的文本内容转换为图片。
+
+    该函数处理文本解析、自动换行、Markdown粗体、分隔符、空行、
+    多种主题、圆角、边框和阴影效果。
+
+    Args:
+        text_content (str): 要渲染的原始文本。
+        output_path (Path): 输出图片的保存路径。
+        font_path (Path): 常规字体的路径。
+        font_path_bold (Path): 粗体字体的路径。
+        font_size (int): 字体大小。
+        padding (int): 图片内容区域的内边距。
+        theme (str): 颜色主题 ('default', 'light', 'dark', 'light-gradient', 'dark-gradient')。
+        use_frame (bool): 是否使用带阴影的边框。
+        corner_radius (int): 圆角半径。
+        width (int): 图片的总宽度。
+        text_line_spacing (int): 文本行之间的额外间距。
+        divider_margin (int): 分隔符上下的外边距。
+    """
+    # 1. 主题和字体设置
+    themes = {
+        "default": {"bg": (255, 255, 255), "text": (0, 0, 0)},
+        "light": {"bg": (253, 246, 227), "text": (101, 123, 131)},
+        "dark": {"bg": (40, 44, 52), "text": (171, 178, 191)},
+        "light-gradient": {"bg": ((240, 240, 250), (210, 220, 235)), "text": (80, 80, 100)},
+        "dark-gradient": {"bg": ((43, 48, 59), (20, 22, 28)), "text": (200, 200, 210)}
+    }
+    selected_theme = themes.get(theme, themes["default"])
+    background_config = selected_theme["bg"]
+    text_color = selected_theme["text"]
+    is_gradient = isinstance(background_config, tuple) and isinstance(background_config[0], tuple)
+
+    try:
+        font_regular = ImageFont.truetype(str(font_path), font_size) if font_path and Path(font_path).exists() else ImageFont.load_default()
+    except (IOError, TypeError):
+        logger.error(f"常规字体 '{font_path}' 加载失败，使用默认字体。")
+        font_regular = ImageFont.load_default()
+        
+    try:
+        font_bold = ImageFont.truetype(str(font_path_bold), font_size) if font_path_bold and Path(font_path_bold).exists() else font_regular
+    except (IOError, TypeError):
+        logger.error(f"粗体字体 '{font_path_bold}' 加载失败，退回使用常规字体。")
+        font_bold = font_regular
+        
+    fonts = {"normal": font_regular, "bold": font_bold}
+
+    # 2. 文本预处理
+    img_width = width
+    max_content_width = img_width - (2 * padding)
+    divider_placeholder = [{"type": "divider"}]
+    empty_line_placeholder = [{"type": "empty"}]
+    no_start_chars = {',', '.', '!', '?', ';', ':', '}', ']', ')', '>', '》', '】', '』', '，', '。', '！', '？', '；', '：', '”', '’', '）', '』', '】', '〉', '》', '、'}
+
+    def parse_line_to_runs(line_text):
+        runs = []
+        parts = re.split(r'(\*\*.*?\*\*)', line_text)
+        for part in parts:
+            if part.startswith('**') and part.endswith('**'):
+                runs.append({"text": part[2:-2], "style": "bold"})
+            elif part:
+                runs.append({"text": part, "style": "normal"})
+        return [r for r in runs if r["text"]]
+
+    def get_run_width(run):
+        return fonts[run["style"]].getbbox(run["text"])[2]
+
+    def wrap_line(runs):
+        lines = []
+        current_line = []
+        current_width = 0
+        
+        # 合并相邻的同一样式的 run
+        merged_runs = []
+        if runs:
+            merged_runs.append(runs[0])
+            for i in range(1, len(runs)):
+                if runs[i]["style"] == merged_runs[-1]["style"]:
+                    merged_runs[-1]["text"] += runs[i]["text"]
+                else:
+                    merged_runs.append(runs[i])
+
+        for run in merged_runs:
+            font = fonts[run["style"]]
+            text = run["text"]
+            
+            i = 0
+            while i < len(text):
+                char = text[i]
+                char_width = font.getbbox(char)[2]
+
+                if current_width + char_width > max_content_width:
+                    # 禁则处理
+                    if char in no_start_chars and current_line:
+                        # 找到当前行最后一个 run 和最后一个字符
+                        last_run_index = len(current_line) - 1
+                        while last_run_index >= 0 and not current_line[last_run_index]["text"]:
+                            last_run_index -= 1
+                        
+                        if last_run_index >= 0:
+                            last_run = current_line[last_run_index]
+                            last_char = last_run["text"][-1]
+                            
+                            # 从当前行移除最后一个字符
+                            last_run["text"] = last_run["text"][:-1]
+                            
+                            # 将当前行添加到结果中
+                            lines.append(current_line)
+                            
+                            # 将被移除的字符作为新行的第一个 run
+                            current_line = [{"text": last_char, "style": last_run["style"]}]
+                            current_width = get_run_width(current_line[0])
+                            
+                            # 重新处理当前字符
+                            continue
+
+                    lines.append(current_line)
+                    current_line = []
+                    current_width = 0
+                
+                if not current_line or current_line[-1]["style"] != run["style"]:
+                    current_line.append({"text": char, "style": run["style"]})
+                else:
+                    current_line[-1]["text"] += char
+                current_width += char_width
+                i += 1
+
+        if current_line:
+            lines.append(current_line)
+        return lines
+
+    original_lines = text_content.split('\n')
+    processed_lines = []
+    for original_line in original_lines:
+        if not original_line.strip() and original_line == "":
+            processed_lines.append(empty_line_placeholder)
+            continue
+        if len(original_line.strip()) >= 3 and set(original_line.strip()) <= {'-', '—'}:
+            processed_lines.append(divider_placeholder)
+            continue
+        
+        runs = parse_line_to_runs(original_line)
+        wrapped_lines = wrap_line(runs)
+        processed_lines.extend(wrapped_lines)
+
+    # 3. 计算总高度
+    def get_line_height(line_runs):
+        max_h = 0
+        for run in line_runs:
+            font = fonts[run.get("style", "normal")]
+            bbox = font.getbbox(run["text"])
+            h = bbox[3] - bbox[1]
+            if h > max_h:
+                max_h = h
+        return max_h
+
+    total_height = 0
+    for i, line in enumerate(processed_lines):
+        is_last_line = (i == len(processed_lines) - 1)
+        
+        if line and "type" in line[0] and line[0]["type"] == "divider":
+            if i > 0 and "type" in processed_lines[i-1][0] and processed_lines[i-1][0]["type"] != "empty":
+                total_height -= text_line_spacing
+            total_height += get_line_height([{"text": "─", "style": "normal"}]) + (2 * divider_margin)
+        elif line and "type" in line[0] and line[0]["type"] == "empty":
+            total_height += get_line_height([{"text": " ", "style": "normal"}])
+        else:
+            total_height += get_line_height(line)
+        
+        if not is_last_line:
+            total_height += text_line_spacing
+            
+    img_height = total_height + (2 * padding)
+
+    # 4. 创建画布并绘制
+    if is_gradient:
+        content_image = create_gradient_image(int(img_width), int(img_height), background_config[0], background_config[1])
+    else:
+        content_image = Image.new("RGB", (int(img_width), int(img_height)), background_config)
+    draw = ImageDraw.Draw(content_image)
+
+    divider_char = '─'
+    char_width = font_regular.getbbox(divider_char)[2]
+    divider_line_text = divider_char * int(max_content_width / char_width) if char_width > 0 else ""
+
+    current_y = padding
+    for i, line in enumerate(processed_lines):
+        is_last_line = (i == len(processed_lines) - 1)
+        
+        if line and "type" in line[0] and line[0]["type"] == "divider":
+            line_height = get_line_height([{"text": "─", "style": "normal"}])
+            if i > 0 and "type" in processed_lines[i-1][0] and processed_lines[i-1][0]["type"] != "empty":
+                current_y -= text_line_spacing
+            current_y += divider_margin
+            draw.text((padding, current_y), divider_line_text, font=font_regular, fill=text_color)
+            current_y += line_height + divider_margin
+        elif line and "type" in line[0] and line[0]["type"] == "empty":
+            line_height = get_line_height([{"text": " ", "style": "normal"}])
+            current_y += line_height
+        else:
+            line_height = get_line_height(line)
+            current_x = padding
+            for run in line:
+                font = fonts[run["style"]]
+                draw.text((current_x, current_y), run["text"], font=font, fill=text_color)
+                current_x += get_run_width(run)
+            current_y += line_height
+        
+        if not is_last_line:
+            current_y += text_line_spacing
+
+    # 5. 应用最终效果并保存
+    final_image = apply_effects(content_image, use_frame, corner_radius)
+    if final_image.mode == 'RGBA' and not output_path.suffix.lower() == '.png':
+        output_path = output_path.with_suffix('.png')
+    final_image.save(output_path)
+    logger.info(f"图片已成功保存到: {output_path.resolve()}")
+
+# --- AstrBot 插件主类 ---
+@register(constants.PLUGIN_NAME, constants.PLUGIN_AUTHOR, constants.PLUGIN_DESCRIPTION, constants.PLUGIN_VERSION)
+class TextToImage(Star):
+    """
+    TextToImage 插件的主类。
+    负责加载配置、初始化路径、注册命令以及处理命令的调用。
+    """
     def __init__(self, context, config: AstrBotConfig) -> None:
+        """初始化插件实例，加载配置和路径。"""
         super().__init__(context=context)
         self.config = config
-        self.scheduler = None
         self._load_config()
         self._initialize_paths()
 
-        try:
-            self.scheduler = AsyncIOScheduler(timezone=self.schedule_timezone)
-            self.scheduler.add_job(
-                self.run_daily_task,
-                "cron",
-                hour=self.schedule_hour,
-                minute=self.schedule_minute,
-            )
-            asyncio.create_task(self._start_scheduler())
-        except Exception as e:
-            logger.error(f"SnapTranslator 调度器初始化失败: {e}", exc_info=True)
-
-    async def _start_scheduler(self):
-        self.scheduler.start()
-        logger.info(
-            "SnapTranslator 任务已调度，将于每日 %s:%s 执行。",
-            f"{self.schedule_hour:02d}",
-            f"{self.schedule_minute:02d}",
-        )
-
     def _load_config(self):
-        """从插件配置中加载所有设置"""
-        try:
-            self.fetch_channel_id = self.config.get("fetch_channel_id")
-            self.summary_channel_id = self.config.get("summary_channel_id")
-        except (ValueError, TypeError):
-            self.fetch_channel_id = None
-            self.summary_channel_id = None
-            logger.warning("fetch_channel_id 或 summary_channel_id 配置格式错误或为空。")
-
-        try:
-            self.schedule_hour = int(self.config.get("schedule_hour"))
-            self.schedule_minute = int(self.config.get("schedule_minute"))
-        except (ValueError, TypeError):
-            self.schedule_hour = 9
-            self.schedule_minute = 0
-            logger.warning("schedule_hour 或 schedule_minute 配置格式错误或为空，" "已使用默认值 09:00。")
-
-        self.schedule_timezone = self.config.get("schedule_timezone")
-
-        try:
-            self.team_answers_bot_id = self.config.get("team_answers_bot_id")
-        except (ValueError, TypeError):
-            self.team_answers_bot_id = None
-            logger.warning("team_answers_bot_id 配置格式错误或为空。")
+        """从 AstrBot 配置中加载并设置插件所需的参数。"""
+        self.text_file_path_template = self.config.get("text_file_path")
+        self.font_path = self.config.get("font_path")
+        self.font_path_bold = self.config.get("font_path_bold")
+        self.font_size = self.config.get("font_size", 24)
+        self.theme = self.config.get("theme", "dark-gradient")
+        self.width = self.config.get("width", 1080)
+        self.padding = self.config.get("padding", 40)
+        self.use_frame = self.config.get("use_frame", True)
+        self.corner_radius = self.config.get("corner_radius", 15)
+        self.text_line_spacing = self.config.get("text_line_spacing", 5)
+        self.divider_margin = self.config.get("divider_margin", 10)
 
     def _initialize_paths(self):
-        """初始化所有文件和目录路径"""
+        """初始化插件所需的数据和输出目录。"""
         self.base_dir = StarTools.get_data_dir(constants.PLUGIN_NAME)
-        self.input_dir = self.base_dir / constants.INPUT_DIR_NAME
         self.output_dir = self.base_dir / constants.OUTPUT_DIR_NAME
-
-        self.input_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    async def run_daily_task(self):
+    def _resolve_dynamic_path(self, path_template: str) -> Path | None:
         """
-        执行每日任务：获取、翻译并发送报告。
+        解析可能包含动态占位符的路径模板。
+        - `${today_prefix}`: 替换为当天的日期 (YYYYMMDD)。
+        - `*` 或 `?`: 解析为glob模式，并返回最新修改的文件。
+        - `~`: 替换为用户主目录。
+        - 相对路径: 解析为相对于 AstrBot 数据目录的路径。
         """
-        logger.info("开始执行每日 Snap 问答获取和翻译任务...")
+        today_prefix = datetime.date.today().strftime('%Y%m%d')
+        resolved_path_str = path_template.replace('${today_prefix}', today_prefix)
+        
+        if resolved_path_str.startswith('~'):
+            resolved_path_str = str(Path.home()) + resolved_path_str[1:]
+        
+        path_obj = Path(resolved_path_str)
+        
+        # 如果路径不是绝对路径，则相对于 AstrBot 的数据目录
+        base_path = Path(get_astrbot_data_path())
+        if not path_obj.is_absolute():
+            path_obj = base_path / path_obj
 
-        if not all(
-            [
-                self.fetch_channel_id,
-                self.summary_channel_id,
-                self.team_answers_bot_id,
-            ]
-        ):
-            logger.error("插件配置不完整 (缺少 channel_id 或 bot 信息)，任务终止。")
-            return
-
-        # 从上下文中获取全局 Discord 客户端
-        discord_platform = self.context.get_platform("discord")
-        if not discord_platform:
-            logger.error("错误：无法获取到全局 Discord 平台实例。")
-            return
-
-        client = discord_platform.client
-        if not client or not client.is_ready():
-            logger.error("错误：全局 Discord 客户端未准备就绪。")
-            return
-
-        logger.info(f"已获取到全局 Discord 客户端，用户: {client.user}")
-
-        # 步骤 1: 获取 Discord 消息
-        logger.info("步骤 1: 获取 Discord 消息...")
-        new_file_path = await self.fetch_discord_messages(client)
-
-        if not new_file_path:
-            logger.info("获取消息失败或没有新消息，任务结束。")
-            return
-
-        # 步骤 2: 翻译
-        logger.info(f"步骤 2: 开始翻译文件 {new_file_path}...")
-        translation_result_message = await self.translate_file(new_file_path)
-
-        # 步骤 3: 推送结果
-        logger.info("步骤 3: 发送最终报告...")
-        summary_channel = client.get_channel(int(self.summary_channel_id))
-        if summary_channel:
-            await self._send_chunked_message(
-                summary_channel,
-                translation_result_message,
-                DISCORD_MESSAGE_CHUNK_SIZE,
-            )
-            logger.info(f"报告已发送至频道 #{getattr(summary_channel, 'name', '未知')}")
+        # 处理通配符，查找最新文件
+        if '*' in path_obj.name or '?' in path_obj.name:
+            file_list = list(path_obj.parent.glob(path_obj.name))
+            if not file_list:
+                logger.warning(f"找不到匹配 '{path_obj}' 的文件。")
+                return None
+            
+            latest_file = max(file_list, key=lambda p: p.stat().st_mtime)
+            logger.info(f"动态路径 '{path_template}' 解析为最新文件: {latest_file}")
+            return latest_file
         else:
-            logger.error(f"错误：找不到用于发送报告的频道 ID: {self.summary_channel_id}")
+            return path_obj
 
-        logger.info("每日任务执行完毕。")
+    @filter.command_group("daily")
+    def daily(self):
+        """'daily' 命令组。"""
+        pass
 
-    async def fetch_discord_messages(self, bot) -> Path | None:
+    @daily.command("dev", "发送每日开发日报")
+    async def daily_dev(self, event: AstrMessageEvent):
         """
-        获取指定 Discord 频道昨天的消息并保存为 JSON.
-        成功时返回文件路径，没有新消息或失败时返回 None.
+        处理 'daily dev' 命令。
+        从指定的文本文件生成日报图片并发送到频道。
         """
-        logger.debug("开始在 Discord 中获取消息...")
-        try:
-            channel = bot.get_channel(int(self.fetch_channel_id))
-            if not channel:
-                logger.error(f"错误：找不到ID为 {self.fetch_channel_id} 的频道。")
-                return None
+        if not event.is_admin():
+            yield event.plain_result("抱歉，只有管理员才能使用此命令。")
+            return
 
-            logger.info(f"成功连接到频道 #{getattr(channel, 'name', '未知')}")
-
-            now_utc = datetime.now(timezone.utc)
-            today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-            yesterday_start_utc = today_start_utc - timedelta(days=1)
-
-            history_data = []
-            async for msg in channel.history(limit=None, after=yesterday_start_utc, before=today_start_utc):
-                if msg.author.id == int(self.team_answers_bot_id) and msg.embeds:
-                    message_data = {
-                        "message_id": msg.id,
-                        "author": {
-                            "id": msg.author.id,
-                            "name": msg.author.name,
-                        },
-                        "timestamp": msg.created_at.isoformat(),
-                        "embeds": [embed.to_dict() for embed in msg.embeds],
-                    }
-                    history_data.append(message_data)
-
-            if not history_data:
-                logger.info(f"频道 #{getattr(channel, 'name', '未知')} 昨天没有符合条件的消息。")
-                return None
-
-            history_data.reverse()
-
-            timestamp_str = datetime.now().strftime("%Y%m%d%H%M%S")
-            output_filename = self.input_dir / f"team-answers_{timestamp_str}.json"
-
-            with open(output_filename, "w", encoding="utf-8") as f:
-                json.dump(history_data, f, indent=4, ensure_ascii=False)
-
-            logger.info(f"成功将 {len(history_data)} 条消息保存到 {output_filename}")
-            return output_filename
-
-        except Exception as e:
-            logger.error(f"获取 Discord 消息时发生严重错误: {e}", exc_info=True)
-            return None
-
-    async def translate_file(self, json_file_path: Path) -> str:
-        """翻译指定的 JSON 文件。"""
-        keyword_content = constants.KEYWORD_CONTENT
-
-        if not json_file_path.exists():
-            return f"翻译任务失败：找不到指定的 JSON 文件 {json_file_path}。"
-
-        with json_file_path.open("r", encoding="utf-8") as f:
-            json_data_content = json.dumps(json.load(f), indent=2, ensure_ascii=False)
-
-        final_prompt = constants.PROMPT_TEMPLATE.format(
-            keyword_content=keyword_content,
-            json_data_content=json_data_content,
-        )
-
-        # 获取全局 LLM 提供商
-        provider = self.context.get_using_provider()
-        if not provider:
-            error_message = "错误：无法获取到当前启用的 LLM 提供商。"
-            logger.error(error_message)
-            return error_message
+        if not self.text_file_path_template:
+            logger.warning("文本文件路径模板未在配置中设置，'daily dev' 命令已跳过。")
+            return
+        
+        # 解析源文件路径
+        text_file = self._resolve_dynamic_path(self.text_file_path_template)
+        
+        if not text_file or not text_file.exists():
+            err_msg = f"错误：文件未找到 '{text_file}' (由模板 '{self.text_file_path_template}' 解析得到)"
+            logger.error(err_msg)
+            yield event.plain_result(err_msg)
+            return
 
         try:
-            # 使用提供商获取翻译结果
-            llm_response = await provider.text_chat(prompt=final_prompt)
-            llm_result_raw = llm_response.completion_text
-
-            if llm_response.role == "err" or not llm_result_raw:
-                error_message = f"API 调用失败: {llm_result_raw or '返回内容为空'}"
-                logger.error(error_message)
-                return f"处理失败，API返回了错误信息：\n{llm_result_raw}"
-
-            try:
-                # LLM 被要求返回 JSON，因此需要解析
-                # 清理可能的 Markdown 代码块标记
-                if llm_result_raw.startswith("```json"):
-                    llm_result_raw = llm_result_raw[7:-4]
-
-                llm_result_json = json.loads(llm_result_raw)
-                llm_result = llm_result_json.get("translated_text")
-                if not llm_result:
-                    raise ValueError("JSON 响应中缺少 'translated_text' 键")
-            except (json.JSONDecodeError, ValueError) as e:
-                error_message = f"解析 LLM 的 JSON 响应失败: {e}\n原始响应: {llm_result_raw}"
-                logger.error(error_message)
-                return "处理失败，无法解析 API 返回的内容。"
-
-            base_filename = json_file_path.stem
-            output_filename = self.output_dir / f"summary_{base_filename}.txt"
-            with open(output_filename, "w", encoding="utf-8") as f:
-                f.write(llm_result)
-            logger.info(f"翻译结果已保存至 {output_filename}")
-
-            return f"""**Marvel Snap 每日开发者问答翻译**
-`{datetime.now().strftime("%Y-%m-%d")}`
-
----
-{llm_result}"""
-
+            # 读取内容并生成带时间戳的输出文件名
+            content = text_file.read_text(encoding='utf-8')
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_filename = self.output_dir / f"daily_dev_{timestamp}.png"
+            
+            # 在线程池中执行图像生成，避免阻塞事件循环
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                text_to_image,
+                content,
+                output_filename,
+                self.font_path,
+                self.font_path_bold,
+                self.font_size,
+                self.padding,
+                self.theme,
+                self.use_frame,
+                self.corner_radius,
+                self.width,
+                self.text_line_spacing,
+                self.divider_margin,
+            )
+            # 发送生成的图片
+            yield event.image_result(str(output_filename))
         except Exception as e:
-            error_message = f"调用 LLM 提供商时出错: {e}"
-            logger.error(error_message, exc_info=True)
-            return f"错误：{error_message}"
-
-    async def _send_chunked_message(self, channel, text: str, chunk_size: int):
-        """将长文本分割成块并异步发送"""
-        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
-        tasks = [channel.send(chunk) for chunk in chunks]
-        await asyncio.gather(*tasks)
+            logger.error(f"生成日报时出错: {str(e)}")
+            yield event.plain_result(f"生成日报时出错: {str(e)}")
+            logger.error(f"处理 'daily dev' 命令时发生未知错误: {e}", exc_info=True)
+            yield event.plain_result(f"处理命令时发生内部错误: {e}")
 
     async def terminate(self):
-        """在插件终止时停止调度器"""
-        if getattr(self, "scheduler", None) and self.scheduler.running:
-            logger.info("正在关闭 SnapTranslator 的调度器...")
-            try:
-                # shutdown() 是一个同步方法，不能使用 await
-                self.scheduler.shutdown()
-                logger.info("SnapTranslator 的调度器已成功关闭。")
-            except Exception as e:
-                logger.error(f"关闭 SnapTranslator 调度器时发生错误: {e}", exc_info=True)
-        else:
-            logger.info("SnapTranslator 的调度器未运行或未初始化，无需关闭。")
+        """插件终止时调用的清理函数。"""
+        logger.info("TextToImage 插件已终止。")

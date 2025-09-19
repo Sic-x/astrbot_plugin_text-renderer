@@ -1,2 +1,0 @@
-apscheduler
-discord.py
