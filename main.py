@@ -1,6 +1,4 @@
-
 import asyncio
-import sys
 from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -12,6 +10,7 @@ from .config import constants
 import datetime
 import re
 
+
 # --- 图像效果函数 ---
 def create_gradient_image(width, height, color1, color2):
     """创建一个从 color1 到 color2 的垂直渐变图像。"""
@@ -20,6 +19,7 @@ def create_gradient_image(width, height, color1, color2):
     gradient = np.linspace(c1, c2, height, dtype=np.uint8)
     image_array = np.tile(gradient, (width, 1, 1)).transpose(1, 0, 2)
     return Image.fromarray(image_array)
+
 
 def apply_effects(image: Image, use_frame: bool, corner_radius: int):
     """为图像应用圆角和可选的带阴影的边框。"""
@@ -42,22 +42,41 @@ def apply_effects(image: Image, use_frame: bool, corner_radius: int):
     shadow_offset = 10
     blur_radius = 15
     shadow_color = (0, 0, 0, 50)
-    
-    frame_with_shadow = Image.new("RGBA", (image.width + 2 * frame_padding + shadow_offset, image.height + 2 * frame_padding + shadow_offset), (0, 0, 0, 0))
-    
+
+    frame_with_shadow = Image.new(
+        "RGBA",
+        (image.width + 2 * frame_padding + shadow_offset, image.height + 2 * frame_padding + shadow_offset),
+        (0, 0, 0, 0),
+    )
+
     shadow = Image.new("RGBA", frame_with_shadow.size, (0, 0, 0, 0))
     shadow_draw = ImageDraw.Draw(shadow)
     shadow_box = (frame_padding, frame_padding, frame_padding + image.width, frame_padding + image.height)
     shadow_draw.rounded_rectangle(shadow_box, radius=corner_radius, fill=shadow_color)
     shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
-    
+
     frame_with_shadow.paste(shadow, (shadow_offset, shadow_offset), shadow)
     frame_with_shadow.paste(image, (frame_padding, frame_padding), image)
-    
+
     return frame_with_shadow
 
+
 # --- 核心文本转图片函数 ---
-def text_to_image(text_content: str, output_path: Path, font_path: Path, font_path_bold: Path, font_size: int, padding: int, theme: str, use_frame: bool, corner_radius: int, width: int, text_line_spacing: int, divider_margin: int, **kwargs):
+def text_to_image(
+    text_content: str,
+    output_path: Path,
+    font_path: Path,
+    font_path_bold: Path,
+    font_size: int,
+    padding: int,
+    theme: str,
+    use_frame: bool,
+    corner_radius: int,
+    width: int,
+    text_line_spacing: int,
+    divider_margin: int,
+    **kwargs,
+):
     """
     将给定的文本内容转换为图片。
 
@@ -84,7 +103,7 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
         "light": {"bg": (253, 246, 227), "text": (101, 123, 131)},
         "dark": {"bg": (40, 44, 52), "text": (171, 178, 191)},
         "light-gradient": {"bg": ((240, 240, 250), (210, 220, 235)), "text": (80, 80, 100)},
-        "dark-gradient": {"bg": ((43, 48, 59), (20, 22, 28)), "text": (200, 200, 210)}
+        "dark-gradient": {"bg": ((43, 48, 59), (20, 22, 28)), "text": (200, 200, 210)},
     }
     selected_theme = themes.get(theme, themes["default"])
     background_config = selected_theme["bg"]
@@ -92,17 +111,25 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
     is_gradient = isinstance(background_config, tuple) and isinstance(background_config[0], tuple)
 
     try:
-        font_regular = ImageFont.truetype(str(font_path), font_size) if font_path and Path(font_path).exists() else ImageFont.load_default()
+        font_regular = (
+            ImageFont.truetype(str(font_path), font_size)
+            if font_path and Path(font_path).exists()
+            else ImageFont.load_default()
+        )
     except (IOError, TypeError):
         logger.error(f"常规字体 '{font_path}' 加载失败，使用默认字体。")
         font_regular = ImageFont.load_default()
-        
+
     try:
-        font_bold = ImageFont.truetype(str(font_path_bold), font_size) if font_path_bold and Path(font_path_bold).exists() else font_regular
+        font_bold = (
+            ImageFont.truetype(str(font_path_bold), font_size)
+            if font_path_bold and Path(font_path_bold).exists()
+            else font_regular
+        )
     except (IOError, TypeError):
         logger.error(f"粗体字体 '{font_path_bold}' 加载失败，退回使用常规字体。")
         font_bold = font_regular
-        
+
     fonts = {"normal": font_regular, "bold": font_bold}
 
     # 2. 文本预处理
@@ -110,13 +137,41 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
     max_content_width = img_width - (2 * padding)
     divider_placeholder = [{"type": "divider"}]
     empty_line_placeholder = [{"type": "empty"}]
-    no_start_chars = {',', '.', '!', '?', ';', ':', '}', ']', ')', '>', '》', '】', '』', '，', '。', '！', '？', '；', '：', '”', '’', '）', '』', '】', '〉', '》', '、'}
+    no_start_chars = {
+        ",",
+        ".",
+        "!",
+        "?",
+        ";",
+        ":",
+        "}",
+        "]",
+        ")",
+        ">",
+        "》",
+        "】",
+        "』",
+        "，",
+        "。",
+        "！",
+        "？",
+        "；",
+        "：",
+        "”",
+        "’",
+        "）",
+        "』",
+        "】",
+        "〉",
+        "》",
+        "、",
+    }
 
     def parse_line_to_runs(line_text):
         runs = []
-        parts = re.split(r'(\*\*.*?\*\*)', line_text)
+        parts = re.split(r"(\*\*.*?\*\*)", line_text)
         for part in parts:
-            if part.startswith('**') and part.endswith('**'):
+            if part.startswith("**") and part.endswith("**"):
                 runs.append({"text": part[2:-2], "style": "bold"})
             elif part:
                 runs.append({"text": part, "style": "normal"})
@@ -129,7 +184,7 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
         lines = []
         current_line = []
         current_width = 0
-        
+
         # 合并相邻的同一样式的 run
         merged_runs = []
         if runs:
@@ -143,7 +198,7 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
         for run in merged_runs:
             font = fonts[run["style"]]
             text = run["text"]
-            
+
             i = 0
             while i < len(text):
                 char = text[i]
@@ -156,28 +211,28 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
                         last_run_index = len(current_line) - 1
                         while last_run_index >= 0 and not current_line[last_run_index]["text"]:
                             last_run_index -= 1
-                        
+
                         if last_run_index >= 0:
                             last_run = current_line[last_run_index]
                             last_char = last_run["text"][-1]
-                            
+
                             # 从当前行移除最后一个字符
                             last_run["text"] = last_run["text"][:-1]
-                            
+
                             # 将当前行添加到结果中
                             lines.append(current_line)
-                            
+
                             # 将被移除的字符作为新行的第一个 run
                             current_line = [{"text": last_char, "style": last_run["style"]}]
                             current_width = get_run_width(current_line[0])
-                            
+
                             # 重新处理当前字符
                             continue
 
                     lines.append(current_line)
                     current_line = []
                     current_width = 0
-                
+
                 if not current_line or current_line[-1]["style"] != run["style"]:
                     current_line.append({"text": char, "style": run["style"]})
                 else:
@@ -189,16 +244,16 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
             lines.append(current_line)
         return lines
 
-    original_lines = text_content.split('\n')
+    original_lines = text_content.split("\n")
     processed_lines = []
     for original_line in original_lines:
         if not original_line.strip() and original_line == "":
             processed_lines.append(empty_line_placeholder)
             continue
-        if len(original_line.strip()) >= 3 and set(original_line.strip()) <= {'-', '—'}:
+        if len(original_line.strip()) >= 3 and set(original_line.strip()) <= {"-", "—"}:
             processed_lines.append(divider_placeholder)
             continue
-        
+
         runs = parse_line_to_runs(original_line)
         wrapped_lines = wrap_line(runs)
         processed_lines.extend(wrapped_lines)
@@ -216,40 +271,42 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
 
     total_height = 0
     for i, line in enumerate(processed_lines):
-        is_last_line = (i == len(processed_lines) - 1)
-        
+        is_last_line = i == len(processed_lines) - 1
+
         if line and "type" in line[0] and line[0]["type"] == "divider":
-            if i > 0 and "type" in processed_lines[i-1][0] and processed_lines[i-1][0]["type"] != "empty":
+            if i > 0 and "type" in processed_lines[i - 1][0] and processed_lines[i - 1][0]["type"] != "empty":
                 total_height -= text_line_spacing
             total_height += get_line_height([{"text": "─", "style": "normal"}]) + (2 * divider_margin)
         elif line and "type" in line[0] and line[0]["type"] == "empty":
             total_height += get_line_height([{"text": " ", "style": "normal"}])
         else:
             total_height += get_line_height(line)
-        
+
         if not is_last_line:
             total_height += text_line_spacing
-            
+
     img_height = total_height + (2 * padding)
 
     # 4. 创建画布并绘制
     if is_gradient:
-        content_image = create_gradient_image(int(img_width), int(img_height), background_config[0], background_config[1])
+        content_image = create_gradient_image(
+            int(img_width), int(img_height), background_config[0], background_config[1]
+        )
     else:
         content_image = Image.new("RGB", (int(img_width), int(img_height)), background_config)
     draw = ImageDraw.Draw(content_image)
 
-    divider_char = '─'
+    divider_char = "─"
     char_width = font_regular.getbbox(divider_char)[2]
     divider_line_text = divider_char * int(max_content_width / char_width) if char_width > 0 else ""
 
     current_y = padding
     for i, line in enumerate(processed_lines):
-        is_last_line = (i == len(processed_lines) - 1)
-        
+        is_last_line = i == len(processed_lines) - 1
+
         if line and "type" in line[0] and line[0]["type"] == "divider":
             line_height = get_line_height([{"text": "─", "style": "normal"}])
-            if i > 0 and "type" in processed_lines[i-1][0] and processed_lines[i-1][0]["type"] != "empty":
+            if i > 0 and "type" in processed_lines[i - 1][0] and processed_lines[i - 1][0]["type"] != "empty":
                 current_y -= text_line_spacing
             current_y += divider_margin
             draw.text((padding, current_y), divider_line_text, font=font_regular, fill=text_color)
@@ -265,16 +322,17 @@ def text_to_image(text_content: str, output_path: Path, font_path: Path, font_pa
                 draw.text((current_x, current_y), run["text"], font=font, fill=text_color)
                 current_x += get_run_width(run)
             current_y += line_height
-        
+
         if not is_last_line:
             current_y += text_line_spacing
 
     # 5. 应用最终效果并保存
     final_image = apply_effects(content_image, use_frame, corner_radius)
-    if final_image.mode == 'RGBA' and not output_path.suffix.lower() == '.png':
-        output_path = output_path.with_suffix('.png')
+    if final_image.mode == "RGBA" and not output_path.suffix.lower() == ".png":
+        output_path = output_path.with_suffix(".png")
     final_image.save(output_path)
     logger.info(f"图片已成功保存到: {output_path.resolve()}")
+
 
 # --- AstrBot 插件主类 ---
 @register(constants.PLUGIN_NAME, constants.PLUGIN_AUTHOR, constants.PLUGIN_DESCRIPTION, constants.PLUGIN_VERSION)
@@ -283,6 +341,7 @@ class TextToImage(Star):
     TextToImage 插件的主类。
     负责加载配置、初始化路径、注册命令以及处理命令的调用。
     """
+
     def __init__(self, context, config: AstrBotConfig) -> None:
         """初始化插件实例，加载配置和路径。"""
         super().__init__(context=context)
@@ -318,26 +377,26 @@ class TextToImage(Star):
         - `~`: 替换为用户主目录。
         - 相对路径: 解析为相对于 AstrBot 数据目录的路径。
         """
-        today_prefix = datetime.date.today().strftime('%Y%m%d')
-        resolved_path_str = path_template.replace('${today_prefix}', today_prefix)
-        
-        if resolved_path_str.startswith('~'):
+        today_prefix = datetime.date.today().strftime("%Y%m%d")
+        resolved_path_str = path_template.replace("${today_prefix}", today_prefix)
+
+        if resolved_path_str.startswith("~"):
             resolved_path_str = str(Path.home()) + resolved_path_str[1:]
-        
+
         path_obj = Path(resolved_path_str)
-        
+
         # 如果路径不是绝对路径，则相对于 AstrBot 的数据目录
         base_path = Path(get_astrbot_data_path())
         if not path_obj.is_absolute():
             path_obj = base_path / path_obj
 
         # 处理通配符，查找最新文件
-        if '*' in path_obj.name or '?' in path_obj.name:
+        if "*" in path_obj.name or "?" in path_obj.name:
             file_list = list(path_obj.parent.glob(path_obj.name))
             if not file_list:
                 logger.warning(f"找不到匹配 '{path_obj}' 的文件。")
                 return None
-            
+
             latest_file = max(file_list, key=lambda p: p.stat().st_mtime)
             logger.info(f"动态路径 '{path_template}' 解析为最新文件: {latest_file}")
             return latest_file
@@ -362,10 +421,10 @@ class TextToImage(Star):
         if not self.text_file_path_template:
             logger.warning("文本文件路径模板未在配置中设置，'daily dev' 命令已跳过。")
             return
-        
+
         # 解析源文件路径
         text_file = self._resolve_dynamic_path(self.text_file_path_template)
-        
+
         if not text_file or not text_file.exists():
             err_msg = f"错误：文件未找到 '{text_file}' (由模板 '{self.text_file_path_template}' 解析得到)"
             logger.error(err_msg)
@@ -374,10 +433,10 @@ class TextToImage(Star):
 
         try:
             # 读取内容并生成带时间戳的输出文件名
-            content = text_file.read_text(encoding='utf-8')
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            content = text_file.read_text(encoding="utf-8")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             output_filename = self.output_dir / f"daily_dev_{timestamp}.png"
-            
+
             # 在线程池中执行图像生成，避免阻塞事件循环
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
