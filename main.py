@@ -1,64 +1,27 @@
 import asyncio
 from pathlib import Path
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import ImageFont
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Star, StarTools, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from .config import constants
 import datetime
-import re
+import time
+from .utils.image_utils import (
+    _parse_text_to_render_units,
+    _calculate_layout,
+    _draw_image_content,
+    apply_effects,
+)
 
-
-# --- 图像效果函数 ---
-def create_gradient_image(width, height, color1, color2):
-    """创建一个从 color1 到 color2 的垂直渐变图像。"""
-    c1 = np.array(color1, dtype=np.uint8)
-    c2 = np.array(color2, dtype=np.uint8)
-    gradient = np.linspace(c1, c2, height, dtype=np.uint8)
-    image_array = np.tile(gradient, (width, 1, 1)).transpose(1, 0, 2)
-    return Image.fromarray(image_array)
-
-
-def apply_effects(image: Image, use_frame: bool, corner_radius: int):
-    """为图像应用圆角和可选的带阴影的边框。"""
-    if not use_frame and corner_radius == 0:
-        return image
-
-    image = image.convert("RGBA")
-    # 应用圆角
-    if corner_radius > 0:
-        mask = Image.new("L", image.size, 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.rounded_rectangle((0, 0, image.width, image.height), radius=corner_radius, fill=255)
-        image.putalpha(mask)
-
-    if not use_frame:
-        return image
-
-    # 应用带阴影的边框
-    frame_padding = 20
-    shadow_offset = 10
-    blur_radius = 15
-    shadow_color = (0, 0, 0, 50)
-
-    frame_with_shadow = Image.new(
-        "RGBA",
-        (image.width + 2 * frame_padding + shadow_offset, image.height + 2 * frame_padding + shadow_offset),
-        (0, 0, 0, 0),
-    )
-
-    shadow = Image.new("RGBA", frame_with_shadow.size, (0, 0, 0, 0))
-    shadow_draw = ImageDraw.Draw(shadow)
-    shadow_box = (frame_padding, frame_padding, frame_padding + image.width, frame_padding + image.height)
-    shadow_draw.rounded_rectangle(shadow_box, radius=corner_radius, fill=shadow_color)
-    shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
-
-    frame_with_shadow.paste(shadow, (shadow_offset, shadow_offset), shadow)
-    frame_with_shadow.paste(image, (frame_padding, frame_padding), image)
-
-    return frame_with_shadow
+THEMES = {
+    "default": {"bg": (255, 255, 255), "text": (0, 0, 0)},
+    "light": {"bg": (253, 246, 227), "text": (101, 123, 131)},
+    "dark": {"bg": (40, 44, 52), "text": (171, 178, 191)},
+    "light-gradient": {"bg": ((240, 240, 250), (210, 220, 235)), "text": (80, 80, 100)},
+    "dark-gradient": {"bg": ((43, 48, 59), (20, 22, 28)), "text": (200, 200, 210)},
+}
 
 
 # --- 核心文本转图片函数 ---
@@ -98,17 +61,7 @@ def text_to_image(
         divider_margin (int): 分隔符上下的外边距。
     """
     # 1. 主题和字体设置
-    themes = {
-        "default": {"bg": (255, 255, 255), "text": (0, 0, 0)},
-        "light": {"bg": (253, 246, 227), "text": (101, 123, 131)},
-        "dark": {"bg": (40, 44, 52), "text": (171, 178, 191)},
-        "light-gradient": {"bg": ((240, 240, 250), (210, 220, 235)), "text": (80, 80, 100)},
-        "dark-gradient": {"bg": ((43, 48, 59), (20, 22, 28)), "text": (200, 200, 210)},
-    }
-    selected_theme = themes.get(theme, themes["default"])
-    background_config = selected_theme["bg"]
-    text_color = selected_theme["text"]
-    is_gradient = isinstance(background_config, tuple) and isinstance(background_config[0], tuple)
+    selected_theme = THEMES.get(theme, THEMES["default"])
 
     try:
         font_regular = (
@@ -132,191 +85,20 @@ def text_to_image(
 
     fonts = {"normal": font_regular, "bold": font_bold}
 
-    # 2. 文本预处理
-    img_width = width
-    max_content_width = img_width - (2 * padding)
-    divider_placeholder = [{"type": "divider"}]
-    empty_line_placeholder = [{"type": "empty"}]
-    no_start_chars = {
-        ",",
-        ".",
-        "!",
-        "?",
-        ";",
-        ":",
-        "}",
-        "]",
-        ")",
-        ">",
-        "》",
-        "】",
-        "』",
-        "，",
-        "。",
-        "！",
-        "？",
-        "；",
-        "：",
-        "”",
-        "’",
-        "）",
-        "』",
-        "】",
-        "〉",
-        "》",
-        "、",
-    }
+    # 2. 文本解析
+    render_units = _parse_text_to_render_units(text_content)
 
-    def parse_line_to_runs(line_text):
-        runs = []
-        parts = re.split(r"(\*\*.*?\*\*)", line_text)
-        for part in parts:
-            if part.startswith("**") and part.endswith("**"):
-                runs.append({"text": part[2:-2], "style": "bold"})
-            elif part:
-                runs.append({"text": part, "style": "normal"})
-        return [r for r in runs if r["text"]]
-
-    def get_run_width(run):
-        return fonts[run["style"]].getbbox(run["text"])[2]
-
-    def wrap_line(runs):
-        lines = []
-        current_line = []
-        current_width = 0
-
-        # 合并相邻的同一样式的 run
-        merged_runs = []
-        if runs:
-            merged_runs.append(runs[0])
-            for i in range(1, len(runs)):
-                if runs[i]["style"] == merged_runs[-1]["style"]:
-                    merged_runs[-1]["text"] += runs[i]["text"]
-                else:
-                    merged_runs.append(runs[i])
-
-        for run in merged_runs:
-            font = fonts[run["style"]]
-            text = run["text"]
-            i = 0
-            while i < len(text):
-                char = text[i]
-                char_width = font.getbbox(char)[2]
-
-                if current_width + char_width > max_content_width:
-                    lines.append(current_line)
-                    current_line = []
-                    current_width = 0
-
-                # 禁则处理：如果新行的第一个字符是禁则字符，则从上一行移动一个字符过来
-                if not current_line and char in no_start_chars and lines:
-                    prev_line = lines[-1]
-                    if prev_line:
-                        last_run = prev_line[-1]
-                        if last_run["text"]:
-                            moved_char = last_run["text"][-1]
-                            last_run["text"] = last_run["text"][:-1]
-                            current_line.append({"text": moved_char, "style": last_run["style"]})
-                            current_width += get_run_width(current_line[-1])
-
-                if not current_line or current_line[-1]["style"] != run["style"]:
-                    current_line.append({"text": char, "style": run["style"]})
-                else:
-                    current_line[-1]["text"] += char
-                current_width += char_width
-                i += 1
-
-        if current_line:
-            lines.append(current_line)
-        return lines
-
-    original_lines = text_content.split("\n")
-    processed_lines = []
-    for original_line in original_lines:
-        if not original_line.strip() and original_line == "":
-            processed_lines.append(empty_line_placeholder)
-            continue
-        if len(original_line.strip()) >= 3 and set(original_line.strip()) <= {"-", "—"}:
-            processed_lines.append(divider_placeholder)
-            continue
-
-        runs = parse_line_to_runs(original_line)
-        wrapped_lines = wrap_line(runs)
-        processed_lines.extend(wrapped_lines)
-
-    # 3. 计算总高度
-    def get_line_height(line_runs):
-        max_h = 0
-        for run in line_runs:
-            font = fonts[run.get("style", "normal")]
-            bbox = font.getbbox(run["text"])
-            h = bbox[3] - bbox[1]
-            if h > max_h:
-                max_h = h
-        return max_h
-
-    def is_divider(line):
-        return line and "type" in line[0] and line[0]["type"] == "divider"
-
-    def is_empty_line(line):
-        return line and "type" in line[0] and line[0]["type"] == "empty"
-
-    total_height = 0
-    for i, line in enumerate(processed_lines):
-        is_last_line = i == len(processed_lines) - 1
-
-        if is_divider(line):
-            if i > 0 and not is_empty_line(processed_lines[i - 1]):
-                total_height -= text_line_spacing
-            total_height += get_line_height([{"text": "─", "style": "normal"}]) + (2 * divider_margin)
-        elif is_empty_line(line):
-            total_height += get_line_height([{"text": " ", "style": "normal"}])
-        else:
-            total_height += get_line_height(line)
-
-        if not is_last_line:
-            total_height += text_line_spacing
-
+    # 3. 计算布局
+    max_content_width = width - (2 * padding)
+    processed_lines, total_height = _calculate_layout(
+        render_units, max_content_width, fonts, text_line_spacing, divider_margin
+    )
     img_height = total_height + (2 * padding)
 
-    # 4. 创建画布并绘制
-    if is_gradient:
-        content_image = create_gradient_image(
-            int(img_width), int(img_height), background_config[0], background_config[1]
-        )
-    else:
-        content_image = Image.new("RGB", (int(img_width), int(img_height)), background_config)
-    draw = ImageDraw.Draw(content_image)
-
-    divider_char = "─"
-    char_width = font_regular.getbbox(divider_char)[2]
-    divider_line_text = divider_char * int(max_content_width / char_width) if char_width > 0 else ""
-
-    current_y = padding
-    for i, line in enumerate(processed_lines):
-        is_last_line = i == len(processed_lines) - 1
-
-        if is_divider(line):
-            line_height = get_line_height([{"text": "─", "style": "normal"}])
-            if i > 0 and not is_empty_line(processed_lines[i - 1]):
-                current_y -= text_line_spacing
-            current_y += divider_margin
-            draw.text((padding, current_y), divider_line_text, font=font_regular, fill=text_color)
-            current_y += line_height + divider_margin
-        elif is_empty_line(line):
-            line_height = get_line_height([{"text": " ", "style": "normal"}])
-            current_y += line_height
-        else:
-            line_height = get_line_height(line)
-            current_x = padding
-            for run in line:
-                font = fonts[run["style"]]
-                draw.text((current_x, current_y), run["text"], font=font, fill=text_color)
-                current_x += get_run_width(run)
-            current_y += line_height
-
-        if not is_last_line:
-            current_y += text_line_spacing
+    # 4. 绘制图像
+    content_image = _draw_image_content(
+        processed_lines, width, img_height, padding, fonts, selected_theme, text_line_spacing, divider_margin
+    )
 
     # 5. 应用最终效果并保存
     final_image = apply_effects(content_image, use_frame, corner_radius)
@@ -384,13 +166,17 @@ class TextToImage(Star):
 
         # 处理通配符，查找最新文件
         if "*" in path_obj.name or "?" in path_obj.name:
+            start_time = time.time()
             file_list = list(path_obj.parent.glob(path_obj.name))
             if not file_list:
                 logger.warning(f"找不到匹配 '{path_obj}' 的文件。")
                 return None
 
             latest_file = max(file_list, key=lambda p: p.stat().st_mtime)
-            logger.info(f"动态路径 '{path_template}' 解析为最新文件: {latest_file}")
+            duration = time.time() - start_time
+            logger.info(
+                f"动态路径 '{path_template}' 在 {duration:.4f} 秒内解析为最新文件: {latest_file} (已检查 {len(file_list)} 个文件)"
+            )
             return latest_file
         else:
             return path_obj
