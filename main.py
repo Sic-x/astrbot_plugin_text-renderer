@@ -90,11 +90,15 @@ def text_to_image(
 
     # 3. 计算布局
     max_content_width = width - (2 * padding)
-    processed_lines, total_height = _calculate_layout(render_units, max_content_width, fonts, text_line_spacing, divider_margin)
+    processed_lines, total_height = _calculate_layout(
+        render_units, max_content_width, fonts, text_line_spacing, divider_margin
+    )
     img_height = total_height + (2 * padding)
 
     # 4. 绘制图像
-    content_image = _draw_image_content(processed_lines, width, img_height, padding, fonts, selected_theme, text_line_spacing, divider_margin)
+    content_image = _draw_image_content(
+        processed_lines, width, img_height, padding, fonts, selected_theme, text_line_spacing, divider_margin
+    )
 
     # 5. 应用最终效果并保存
     final_image = apply_effects(content_image, use_frame, corner_radius)

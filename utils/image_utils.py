@@ -3,9 +3,33 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 NO_START_CHARS = {
-    ",", ".", "!", "?", ";", ":", "}", "]", ")", ">",
-    "》", "】", "』", "，", "。", "！", "？", "；", "：",
-    "”", "’", "）", "』", "】", "〉", "》", "、",
+    ",",
+    ".",
+    "!",
+    "?",
+    ";",
+    ":",
+    "}",
+    "]",
+    ")",
+    ">",
+    "》",
+    "】",
+    "』",
+    "，",
+    "。",
+    "！",
+    "？",
+    "；",
+    "：",
+    "”",
+    "’",
+    "）",
+    "』",
+    "】",
+    "〉",
+    "》",
+    "、",
 }
 
 
@@ -48,7 +72,7 @@ def apply_effects(image: Image, use_frame: bool, corner_radius: int):
     )
 
     shadow = Image.new("RGBA", frame_with_shadow.size, (0, 0, 0, 0))
-    shadow_draw = ImageДraw.Draw(shadow)
+    shadow_draw = ImageDraw.Draw(shadow)
     shadow_box = (frame_padding, frame_padding, frame_padding + image.width, frame_padding + image.height)
     shadow_draw.rounded_rectangle(shadow_box, radius=corner_radius, fill=shadow_color)
     shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
@@ -61,7 +85,7 @@ def apply_effects(image: Image, use_frame: bool, corner_radius: int):
 
 def _parse_text_to_render_units(text_content: str):
     """将原始文本解析成一个渲染单元的结构化列表。"""
-    
+
     def parse_line_to_runs(line_text):
         runs = []
         parts = re.split(r"(\*\*.*?\*\*)", line_text)
@@ -81,16 +105,14 @@ def _parse_text_to_render_units(text_content: str):
         if len(original_line.strip()) >= 3 and set(original_line.strip()) <= {"-", "—"}:
             render_units.append([{"type": "divider"}])
             continue
-        
         runs = parse_line_to_runs(original_line)
         render_units.append(runs)
-        
     return render_units
 
 
 def _calculate_layout(render_units, max_width, fonts, text_line_spacing, divider_margin):
     """计算换行和每个元素的位置，并返回最终的图像尺寸。"""
-    
+
     def get_run_width(run):
         return fonts[run["style"]].getbbox(run["text"])[2]
 
@@ -136,7 +158,6 @@ def _calculate_layout(render_units, max_width, fonts, text_line_spacing, divider
                         end -= 1
 
                 chunk = text[start:end]
-                
                 # Add the resulting chunk to the current line
                 if chunk:
                     if current_line and current_line[-1]["style"] == run["style"]:
@@ -150,9 +171,7 @@ def _calculate_layout(render_units, max_width, fonts, text_line_spacing, divider
                     lines.append(current_line)
                     current_line = []
                     current_width = 0
-                
                 start = end
-
         if current_line:
             lines.append(current_line)
         processed_lines.extend(lines)
@@ -188,22 +207,18 @@ def _calculate_layout(render_units, max_width, fonts, text_line_spacing, divider
 
         if not is_last_line:
             total_height += text_line_spacing
-            
     return processed_lines, total_height
 
 
 def _draw_image_content(processed_lines, width, height, padding, fonts, theme, text_line_spacing, divider_margin):
     """在图像上进行实际的绘制操作。"""
-    
     selected_theme = theme
     background_config = selected_theme["bg"]
     text_color = selected_theme["text"]
     is_gradient = isinstance(background_config, tuple) and isinstance(background_config[0], tuple)
 
     if is_gradient:
-        content_image = create_gradient_image(
-            int(width), int(height), background_config[0], background_config[1]
-        )
+        content_image = create_gradient_image(int(width), int(height), background_config[0], background_config[1])
     else:
         content_image = Image.new("RGB", (int(width), int(height)), background_config)
     draw = ImageDraw.Draw(content_image)
@@ -253,5 +268,4 @@ def _draw_image_content(processed_lines, width, height, padding, fonts, theme, t
 
         if not is_last_line:
             current_y += text_line_spacing
-            
     return content_image
