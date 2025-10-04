@@ -239,13 +239,13 @@ class TextToImage(Star):
                 yield event.image_result(str(output_filename))
             else:
                 # 文件较大，分块处理
-                lines = content.split('\n')
+                lines = content.split("\n")
                 chunks = []
                 current_chunk_lines = []
                 current_chunk_size = 0
 
                 for line in lines:
-                    line_bytes = line.encode('utf-8')
+                    line_bytes = line.encode("utf-8")
                     if current_chunk_size + len(line_bytes) + 1 > MAX_CHUNK_SIZE and current_chunk_lines:
                         chunks.append("\n".join(current_chunk_lines))
                         current_chunk_lines = [line]
