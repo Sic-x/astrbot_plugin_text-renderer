@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from PIL import ImageFont
 from astrbot.api import AstrBotConfig, logger
@@ -191,6 +192,7 @@ class TextToImage(Star):
         """
         处理 'daily dev' 命令。
         从指定的文本文件生成日报图片并发送到频道。
+        如果文件大小超过10KB，则会裁剪成多张图片发送。
         """
         if not event.is_admin():
             yield event.plain_result("抱歉，只有管理员才能使用此命令。")
@@ -200,7 +202,6 @@ class TextToImage(Star):
             logger.warning("文本文件路径模板未在配置中设置，'daily dev' 命令已跳过。")
             return
 
-        # 解析源文件路径
         text_file = self._resolve_dynamic_path(self.text_file_path_template)
 
         if not text_file or not text_file.exists():
@@ -210,31 +211,75 @@ class TextToImage(Star):
             return
 
         try:
-            # 读取内容并生成带时间戳的输出文件名
+            file_size = os.path.getsize(text_file)
             content = text_file.read_text(encoding="utf-8")
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = self.output_dir / f"daily_dev_{timestamp}.png"
-
-            # 在线程池中执行图像生成，避免阻塞事件循环
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                text_to_image,
-                content,
-                output_filename,
-                self.font_path,
-                self.font_path_bold,
-                self.font_size,
-                self.padding,
-                self.theme,
-                self.use_frame,
-                self.corner_radius,
-                self.width,
-                self.text_line_spacing,
-                self.divider_margin,
-            )
-            # 发送生成的图片
-            yield event.image_result(str(output_filename))
+            MAX_CHUNK_SIZE = 10 * 1024  # 10KB
+
+            if file_size <= MAX_CHUNK_SIZE:
+                # 文件较小，直接生成单张图片
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_filename = self.output_dir / f"daily_dev_{timestamp}.png"
+                await loop.run_in_executor(
+                    None,
+                    text_to_image,
+                    content,
+                    output_filename,
+                    self.font_path,
+                    self.font_path_bold,
+                    self.font_size,
+                    self.padding,
+                    self.theme,
+                    self.use_frame,
+                    self.corner_radius,
+                    self.width,
+                    self.text_line_spacing,
+                    self.divider_margin,
+                )
+                yield event.image_result(str(output_filename))
+            else:
+                # 文件较大，分块处理
+                lines = content.split("\n")
+                chunks = []
+                current_chunk_lines = []
+                current_chunk_size = 0
+
+                for line in lines:
+                    line_bytes = line.encode("utf-8")
+                    if current_chunk_size + len(line_bytes) + 1 > MAX_CHUNK_SIZE and current_chunk_lines:
+                        chunks.append("\n".join(current_chunk_lines))
+                        current_chunk_lines = [line]
+                        current_chunk_size = len(line_bytes)
+                    else:
+                        current_chunk_lines.append(line)
+                        current_chunk_size += len(line_bytes) + 1
+
+                if current_chunk_lines:
+                    chunks.append("\n".join(current_chunk_lines))
+
+                for i, chunk_content in enumerate(chunks):
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    output_filename = self.output_dir / f"daily_dev_{timestamp}_part_{i+1}.png"
+
+                    await loop.run_in_executor(
+                        None,
+                        text_to_image,
+                        chunk_content,
+                        output_filename,
+                        self.font_path,
+                        self.font_path_bold,
+                        self.font_size,
+                        self.padding,
+                        self.theme,
+                        self.use_frame,
+                        self.corner_radius,
+                        self.width,
+                        self.text_line_spacing,
+                        self.divider_margin,
+                    )
+                    yield event.image_result(str(output_filename))
+                    await asyncio.sleep(1)  # 防止发送过于频繁
+
         except Exception as e:
             logger.error(f"处理 'daily dev' 命令时发生未知错误: {e}", exc_info=True)
             yield event.plain_result(f"生成日报时出错: {str(e)}")
