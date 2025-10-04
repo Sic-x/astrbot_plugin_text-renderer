@@ -253,14 +253,14 @@ class TextToImage(Star):
                     else:
                         current_chunk_lines.append(line)
                         current_chunk_size += len(line_bytes) + 1
-                
+
                 if current_chunk_lines:
                     chunks.append("\n".join(current_chunk_lines))
 
                 for i, chunk_content in enumerate(chunks):
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     output_filename = self.output_dir / f"daily_dev_{timestamp}_part_{i+1}.png"
-                    
+
                     await loop.run_in_executor(
                         None,
                         text_to_image,
@@ -278,7 +278,7 @@ class TextToImage(Star):
                         self.divider_margin,
                     )
                     yield event.image_result(str(output_filename))
-                    await asyncio.sleep(1) # 防止发送过于频繁
+                    await asyncio.sleep(1)  # 防止发送过于频繁
 
         except Exception as e:
             logger.error(f"处理 'daily dev' 命令时发生未知错误: {e}", exc_info=True)
